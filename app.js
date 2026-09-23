@@ -234,5 +234,5 @@ io.on("connection", (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`FlyChat is running on port ${PORT}...`);
+  console.log(`Flyvo is running on port ${PORT}...`);
 });
