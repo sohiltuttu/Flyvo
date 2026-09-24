@@ -6,6 +6,9 @@
 <title>Flyvo</title>
 <script src="/socket.io/socket.io.js"></script>
 
+<!-- Google AdSense Code -->
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1891242518649120" crossorigin="anonymous"></script>
+
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -199,6 +202,12 @@ button { cursor: pointer; }
 #toast { position: fixed; z-index: 2000; left: 50%; bottom: 95px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none; padding: 11px 16px; border-radius: 13px; background: #eeeeee; color: #080808; font-size: 12px; font-weight: 400; box-shadow: 0 15px 40px rgba(0,0,0,.5); transition: .25s; }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* UPLOAD PROGRESS STYLES */
+.media-container { position: relative; display: inline-block; overflow: hidden; border-radius: 12px; }
+.upload-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; background: rgba(0,0,0,0.6); padding: 10px; border-radius: 50px; width: 60px; height: 60px; }
+.circular-spinner { width: 24px; height: 24px; border: 3px solid rgba(255, 255, 255, 0.2); border-top: 3px solid #ffffff; border-radius: 50%; animation: spin 1s linear infinite; }
+.upload-percentage { color: #ffffff; font-size: 11px; font-weight: bold; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+
 /* ANIMATIONS */
 @keyframes cardIn { from { opacity: 0; transform: translateY(25px) scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes messageIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
@@ -210,6 +219,7 @@ button { cursor: pointer; }
 @keyframes incomingRing { 0% { transform: scale(.7); opacity: .8; } 100% { transform: scale(1.65); opacity: 0; } }
 @keyframes recordingPulse { 0%,100% { transform: scale(.8); opacity: .5; } 50% { transform: scale(1.2); opacity: 1; } }
 @keyframes statusPulse { 0%,100% { opacity: .65; } 50% { opacity: 1; } }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
 /* MOBILE */
 @media (max-width: 600px) {
@@ -243,7 +253,7 @@ button { cursor: pointer; }
     <button id="joinBtn" class="primary-btn">Join Room</button>
     <div class="note">Use a room code that you can safely share with the other person.</div>
     <div class="credits">
-      This website created by Sohil Salim<br><br>
+      This website created by Sohil Salim and Thasni<br><br>
       <a href="#" id="aboutBtn" style="color: #666; text-decoration: underline; font-size: 12px; transition: 0.2s;">About Us</a>
     </div>
   </div>
@@ -350,10 +360,10 @@ button { cursor: pointer; }
 
 <script>
 // IMPORTANT: Using sessionStorage to distinguish tabs properly
-let myUserId = sessionStorage.getItem("flychat_uid");
+let myUserId = sessionStorage.getItem("flyvo_uid");
 if (!myUserId) {
   myUserId = "user_" + Math.random().toString(36).substr(2, 9);
-  sessionStorage.setItem("flychat_uid", myUserId);
+  sessionStorage.setItem("flyvo_uid", myUserId);
 }
 
 const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000 });
@@ -523,6 +533,17 @@ function cancelReply() {
 function createMessageRow(data) {
   if (data.type === "system") { addSystemMessage(data.text); return; }
   const mine = data.userId ? (data.userId === myUserId) : (data.senderId === socket.id);
+  
+  // REMOVE TEMPORARY UPLOAD BUBBLE IF THIS IS THE FINAL SENT FILE
+  if (mine && data.type === "file") {
+    const tempRow = document.querySelector(".temp-upload-row");
+    if (tempRow) {
+      if (tempRow.dataset.interval) clearInterval(tempRow.dataset.interval);
+      if (tempRow.dataset.blobUrl) URL.revokeObjectURL(tempRow.dataset.blobUrl);
+      tempRow.remove();
+    }
+  }
+
   const row = document.createElement("div"); row.className = "message-row " + (mine ? "mine" : "other");
   const bubble = document.createElement("div"); bubble.className = "bubble";
 
@@ -610,10 +631,83 @@ function clearFilePreview() {
   pendingFile = null; if (pendingFileURL) { URL.revokeObjectURL(pendingFileURL); pendingFileURL = null; }
   fileInput.value = ""; previewMediaContainer.innerHTML = ""; previewName.textContent = ""; previewPanel.classList.remove("visible");
 }
+
 sendFileBtn.addEventListener("click", () => {
-  if (!pendingFile) return; const reader = new FileReader();
-  reader.onload = () => { socket.emit("send-message", { type: "file", name: pendingFile.name, mime: pendingFile.type, data: reader.result, userId: myUserId, timestamp: Date.now(), replyTo: replyingTo }); clearFilePreview(); cancelReply(); };
-  reader.readAsDataURL(pendingFile);
+  if (!pendingFile) return; 
+  
+  const file = pendingFile;
+  const fileURL = pendingFileURL;
+  pendingFileURL = null; 
+  
+  const reader = new FileReader();
+
+  // CREATE TEMPORARY UPLOAD BUBBLE
+  const tempRow = document.createElement("div");
+  tempRow.className = "message-row mine temp-upload-row";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  tempRow.dataset.blobUrl = fileURL;
+
+  if (file.type.startsWith("image/") || file.type.startsWith("video/")) {
+      const mediaContainer = document.createElement("div");
+      mediaContainer.className = "media-container";
+      
+      const mediaEl = document.createElement(file.type.startsWith("image/") ? "img" : "video");
+      mediaEl.src = fileURL;
+      mediaEl.className = "message-media";
+      mediaContainer.appendChild(mediaEl);
+      
+      const overlay = document.createElement("div");
+      overlay.className = "upload-overlay";
+      overlay.innerHTML = `<div class="circular-spinner"></div><span class="upload-percentage">0%</span>`;
+      mediaContainer.appendChild(overlay);
+      
+      bubble.appendChild(mediaContainer);
+  } else {
+      bubble.innerHTML = `<div style="display:flex; align-items:center; gap:10px; padding: 5px;"><div class="circular-spinner" style="width:20px;height:20px;border-width:2px;border-color:rgba(0,0,0,0.15);border-top-color:#000;"></div> <span class="upload-percentage" style="color:#080808; margin-top:0;">Uploading... 0%</span></div>`;
+  }
+  
+  tempRow.appendChild(bubble);
+  messages.appendChild(tempRow);
+  messages.scrollTop = messages.scrollHeight;
+  
+  const progressSpan = tempRow.querySelector(".upload-percentage");
+  
+  // Use setTimeout to yield thread to browser for UI update before heavy file reading
+  setTimeout(() => {
+    reader.onprogress = (e) => {
+        if (e.lengthComputable && progressSpan) {
+            const percent = Math.round((e.loaded / e.total) * 40); 
+            progressSpan.textContent = percent + "%";
+        }
+    };
+
+    reader.onload = () => { 
+        if (progressSpan) progressSpan.textContent = "40%";
+        let fakeProgress = 40;
+        const fakeInterval = setInterval(() => {
+            fakeProgress += Math.floor(Math.random() * 5) + 1; // slower increment to avoid hitting 99 too fast on mobile
+            if (fakeProgress > 98) fakeProgress = 98; 
+            if (progressSpan) progressSpan.textContent = fakeProgress + "%";
+        }, 500);
+        tempRow.dataset.interval = fakeInterval;
+
+        socket.emit("send-message", { 
+            type: "file", 
+            name: file.name, 
+            mime: file.type, 
+            data: reader.result, 
+            userId: myUserId, 
+            timestamp: Date.now(), 
+            replyTo: replyingTo 
+        }); 
+    };
+    
+    reader.readAsDataURL(file);
+  }, 50); // slight delay ensures the upload UI renders first
+
+  clearFilePreview(); 
+  cancelReply();
 });
 
 micBtn.addEventListener("click", startRecording);
